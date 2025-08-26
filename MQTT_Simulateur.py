@@ -17,6 +17,7 @@ BROKER_HOST = "localhost"
 BROKER_PORT = 1883
 
 TOPIC_NEW = "simulateur/new"
+TOPIC_DELETE = "simulateur/delete"
 TOPIC_README = "simulateur/readme"
 
 # Format des topics pour les paramètres
@@ -36,6 +37,7 @@ SIMULATOR_README_TEXT = """
 Ce simulateur publie des valeurs aléatoires sur un topic à intervalles réguliers.  
 Pour créer une nouvelle variable simulée, publiez un message JSON (ou une chaîne
 de paires clé=valeur séparées par des virgules) sur le topic **simulateur/new**.
+Pour supprimer une variable, publiez son nom sur le topic **simulateur/delete**.
 
 ### Format de la charge utile
 
@@ -105,6 +107,19 @@ class SimVar:
         for topic, value in params.items():
             client.publish(topic, payload=value, qos=1, retain=True)
 
+    def delete_params(self, client: mqtt.Client):  # NOUVEAU: Méthode pour supprimer
+        """Supprime tous les paramètres en publiant des chaînes vides."""
+        topics = [
+            TOPIC_PARAM_PERIOD.format(self.name),
+            TOPIC_PARAM_MIN.format(self.name),
+            TOPIC_PARAM_MAX.format(self.name),
+            TOPIC_PARAM_NOISE.format(self.name),
+            TOPIC_PARAM_PERIOD_PUBLISH.format(self.name),
+            f"simulateur/{self.name}/value"
+        ]
+        for topic in topics:
+            client.publish(topic, payload="", qos=1, retain=True)
+
     def update_param(self, param_name: str, value: float):
         """Met à jour un paramètre spécifique."""
         if param_name == 'period':
@@ -162,17 +177,19 @@ simvars = {}  # dictionnaire name → SimVar
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ Connecté au broker")
+        # Publication du README
+        client.publish(TOPIC_README,
+                       payload=SIMULATOR_README_TEXT.strip(),
+                       retain=True,
+                       qos=0)
+
         client.subscribe(TOPIC_NEW)
+        client.subscribe(TOPIC_DELETE)  # NOUVEAU: S'abonner au topic de suppression
 
         # S'abonner aux topics de paramètres pour toutes les variables
         for pattern in [TOPIC_PARAM_PERIOD, TOPIC_PARAM_MIN, TOPIC_PARAM_MAX,
                         TOPIC_PARAM_NOISE, TOPIC_PARAM_PERIOD_PUBLISH]:
             client.subscribe(pattern.format('+'))
-
-        # Publication du README
-        client.publish(TOPIC_README,
-                       payload=SIMULATOR_README_TEXT.strip(),
-                       qos=0)
 
         # Création de la variable A via le topic new
         init_params = {
@@ -190,7 +207,7 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     try:
-        # Gestion des nouveaux simulateurs
+        # Gestion des nouvelles variables simulées
         if msg.topic == TOPIC_NEW:
             payload = json.loads(msg.payload)
             name = payload["name"]
@@ -205,6 +222,17 @@ def on_message(client, userdata, msg):
             simvars[name] = sv
             sv.publish_params(client)
             print(f"✅ Variable '{name}' créée avec les paramètres spécifiés")
+            return
+
+        # Gestion de la suppression de variables simulées
+        if msg.topic == TOPIC_DELETE:
+            name = msg.payload.decode('utf-8').strip()
+            if name in simvars:
+                simvars[name].delete_params(client)
+                del simvars[name]
+                print(f"✅ Variable '{name}' supprimée")
+            else:
+                print(f"⚠️ Variable '{name}' non trouvée")
             return
 
         # Gestion des modifications de paramètres
