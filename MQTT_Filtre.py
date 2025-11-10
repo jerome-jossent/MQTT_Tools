@@ -19,13 +19,9 @@ BROKER_PORT = 1883
 TOPIC_FILTER_NEW = "Filter/new"  # Topic pour créer un nouveau filtre
 TOPIC_FILTER_DELETE = "Filter/delete"  # Topic pour supprimer un filtre
 INITIAL_FILTER_TOPIC = "simulateur/A/value"  # Topic initial à filtrer
-DEFAULT_MODE = 1  # moyenne glissante
-DEFAULT_WINDOW_SIZE = 9
-
-
-# --------------------------------------------------------------------------- #
-# Classe Filter
-# --------------------------------------------------------------------------- #
+TOPIC_FILTER_INFO = "Filter/infos"  # Topic pour afficher les dernières infos
+DEFAULT_MODE = 1  # 1 : moyenne glissante 2 : médiane glissante
+DEFAULT_WINDOW_SIZE = 5
 
 class Filter:
     def __init__(self, source_topic, filter_name, window_size=DEFAULT_WINDOW_SIZE, mode=DEFAULT_MODE):
@@ -63,19 +59,10 @@ class Filter:
         for topic in topics:
             client.publish(topic, payload="", qos=1, retain=True)
 
+filters = {}  # key: filter_name (ex: "A_1"), value: instance Filter
+source_counters = {}  # key: topic source, value: compteur pour la nomenclature
 
-# --------------------------------------------------------------------------- #
-# Variables globales
-# --------------------------------------------------------------------------- #
-
-filters = {}  # key: filter_name (ex: "A_1"), value: Filter instance
-source_counters = {}  # key: source_topic, value: compteur pour la nomenclature
-
-
-# --------------------------------------------------------------------------- #
 # Fonctions utilitaires
-# --------------------------------------------------------------------------- #
-
 def extract_variable_name(source_topic):
     """Extrait le nom de la variable depuis le topic source.
     Ex: 'simulateur/A/value' -> 'A'
@@ -86,7 +73,6 @@ def extract_variable_name(source_topic):
     else:
         # Fallback: utiliser le topic complet sans les slashes
         return source_topic.replace('/', '_')
-
 
 def generate_filter_name(source_topic):
     """Génère un nom unique pour le filtre basé sur le topic source.
@@ -106,7 +92,6 @@ def generate_filter_name(source_topic):
         if proposed_name not in filters:
             return proposed_name
 
-
 def find_filter_by_param_topic(param_topic):
     """Trouve le filtre correspondant à un topic de paramètre."""
     for filter_name, filter_obj in filters.items():
@@ -115,23 +100,33 @@ def find_filter_by_param_topic(param_topic):
     return None
 
 
-# --------------------------------------------------------------------------- #
 # Gestion du signal SIGINT
-# --------------------------------------------------------------------------- #
-
 def graceful_shutdown(signum, frame):
     print("\nArrêt demandé – nettoyage…")
     client.disconnect()
     sys.exit(0)
 
-
 signal.signal(signal.SIGINT, graceful_shutdown)
 
+messages = []
+messages_max = 10
 
-# --------------------------------------------------------------------------- #
+# Display infos sur TOPIC_FILTER_INFO
+def print_mqtt(message):
+    print(message)
+    messages.append(message)
+
+    while len(messages) > messages_max:
+        messages.pop(0)
+
+    last_X_messages = "\n".join(messages)
+
+    # ne garde que les 1000 derniers caractères
+    last_X_messages = last_X_messages[-10000:]
+
+    client.publish(TOPIC_FILTER_INFO, last_X_messages, qos=0, retain=True)
+
 # Callback MQTT
-# --------------------------------------------------------------------------- #
-
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ Connexion au broker réussie.")
@@ -139,22 +134,20 @@ def on_connect(client, userdata, flags, rc):
         client.subscribe([
             (TOPIC_FILTER_NEW, 0),  # Topic de création
             (TOPIC_FILTER_DELETE, 0),  # Topic de suppression
-            ("simulateur/+/value", 0),  # Topics de valeurs
+            ("simulateur/+/value", 0),  # Topics de valeurs simulées par le script MQTT_Simulateur.py
         ])
 
         # Si aucun filtre n'existe, créer le filtre initial
-        if not filters:
-            client.publish(TOPIC_FILTER_NEW, INITIAL_FILTER_TOPIC)
+        # if not filters:
+        #     client.publish(TOPIC_FILTER_NEW, INITIAL_FILTER_TOPIC)
     else:
         print(f"❌ Échec de connexion (code {rc}).")
-
 
 def on_disconnect(client, userdata, rc):
     if rc != 0:
         print(f"⚠️ Déconnexion inattendue (code {rc}) – tentative de reconnexion…")
     else:
         print("✅ Déconnexion propre.")
-
 
 def on_message(client, userdata, msg):
     topic = msg.topic
@@ -181,12 +174,12 @@ def on_message(client, userdata, msg):
             client.publish(new_filter.mode_topic, str(DEFAULT_MODE), qos=0, retain=True)
             client.publish(new_filter.window_topic, str(DEFAULT_WINDOW_SIZE), qos=0, retain=True)
 
-            print(f"✅ Nouveau filtre créé: {filter_name} pour {source_topic}")
-            print(f"   → Topic filtré: {new_filter.filtered_topic}")
+            print_mqtt(f"✅ Nouveau filtre créé: {filter_name} pour {source_topic}")
+            print_mqtt(f"   → Topic filtré: {new_filter.filtered_topic}")
             return
 
         except Exception as e:
-            print(f"⚠️ Erreur lors de la création du filtre: {e}")
+            print_mqtt(f"⚠️ Erreur lors de la création du filtre: {e}")
             return
 
     # Suppression d'un filtre
@@ -201,12 +194,13 @@ def on_message(client, userdata, msg):
                 # Supprimer les topics MQTT
                 filter_obj.delete_topics(client)
                 del filters[filter_name]
-                print(f"✅ Filtre supprimé: {filter_name}")
+                print_mqtt(f"✅ Filtre supprimé: {filter_name}")
             else:
-                print(f"⚠️ Aucun filtre trouvé avec le nom: {filter_name}")
+                print_mqtt(f"⚠️ Aucun filtre trouvé avec le nom: {filter_name}")
+                show_active_filters()
             return
         except Exception as e:
-            print(f"⚠️ Erreur lors de la suppression du filtre: {e}")
+            print_mqtt(f"⚠️ Erreur lors de la suppression du filtre: {e}")
             return
 
     # Gestion des valeurs entrantes - traiter TOUS les filtres qui correspondent
@@ -218,7 +212,7 @@ def on_message(client, userdata, msg):
                 client.publish(filter_obj.filtered_topic, f"{filtered_val:.6f}", qos=0)
                 # print(f"[{time.strftime('%H:%M:%S')}] {filter_name}: {filter_obj.source_topic} → {filtered_val:.6f}")
             except ValueError:
-                print(f"⚠️ Valeur invalide sur {topic}: {msg.payload}")
+                print_mqtt(f"⚠️ Valeur invalide sur {topic}: {msg.payload}")
             # PAS DE BREAK ici - on continue pour traiter tous les filtres
 
     # Gestion des paramètres (mode et fenêtre)
@@ -230,27 +224,23 @@ def on_message(client, userdata, msg):
                 if val in (1, 2):
                     filter_obj.mode = val
                     mode_name = 'moyenne' if val == 1 else 'médiane'
-                    print(f"[{time.strftime('%H:%M:%S')}] {filter_obj.filter_name} → Mode changé: {mode_name}")
+                    print_mqtt(f"[{time.strftime('%H:%M:%S')}] {filter_obj.filter_name} → Mode changé: {mode_name}")
                 else:
-                    print(f"⚠️ Mode invalide (doit être 1 ou 2): {val}")
+                    print_mqtt(f"⚠️ Mode invalide (doit être 1 ou 2): {val}")
             except ValueError:
-                print(f"⚠️ Mode invalide sur {topic}: {msg.payload}")
+                print_mqtt(f"⚠️ Mode invalide sur {topic}: {msg.payload}")
 
         elif topic == filter_obj.window_topic:
             try:
                 val = int(msg.payload.decode('utf-8'))
                 if val > 0:
                     filter_obj.update_window_size(val)
-                    print(f"[{time.strftime('%H:%M:%S')}] {filter_obj.filter_name} → Taille fenêtre: {val}")
+                    print_mqtt(f"[{time.strftime('%H:%M:%S')}] {filter_obj.filter_name} → Taille fenêtre: {val}")
                 else:
-                    print("⚠️ La taille de la fenêtre doit être positive")
+                    print_mqtt("⚠️ La taille de la fenêtre doit être positive")
             except ValueError:
-                print(f"⚠️ Taille de fenêtre invalide sur {topic}: {msg.payload}")
+                print_mqtt(f"⚠️ Taille de fenêtre invalide sur {topic}: {msg.payload}")
 
-
-# --------------------------------------------------------------------------- #
-# Programme principal
-# --------------------------------------------------------------------------- #
 
 client = mqtt.Client()
 client.on_connect = on_connect
@@ -282,10 +272,12 @@ def show_active_filters():
     if filters:
         print(f"\n📊 Filtres actifs ({len(filters)}):")
         for filter_name, filter_obj in filters.items():
-            mode_str = "moyenne" if filter_obj.mode == 1 else "médiane"
+            if filter_obj.mode == 1:
+                mode_str = "moyenne"
+            if filter_obj.mode == 2:
+                mode_str = "médiane"
             print(f"   • {filter_name}: {filter_obj.source_topic} → {filter_obj.filtered_topic}")
-            print(f"     Mode: {mode_str}, Fenêtre: {filter_obj.window_size}")
-
+            print(f"     Mode ({filter_obj.mode}): {mode_str}, Fenêtre: {filter_obj.window_size}")
 
 # Afficher l'état initial
 time.sleep(2)  # Laisser le temps au filtre initial de se créer
