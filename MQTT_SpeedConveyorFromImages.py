@@ -109,7 +109,7 @@ def on_message(client, userdata, msg):
                 }
 
                 client.publish(TOPIC_VITESSE, str(vitesse_m_s))
-                client.publish(TOPIC_VITESSE_FULL, str(vitesse_data))
+                #client.publish(TOPIC_VITESSE_FULL, str(vitesse_data))
                 print(f"Vitesse: {vitesse_m_s:.3f} m/s (déplacement: {displacement}px, confiance: {confidence:.2f})")
             else:
                 print(f"Pas de correspondance trouvée (confiance: {confidence:.2f} < {TOLERANCE})")

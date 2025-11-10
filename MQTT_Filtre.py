@@ -28,8 +28,8 @@ class Filter:
         self.source_topic = source_topic
         self.filter_name = filter_name  # Ex: "A_1", "A_2", etc.
         self.filtered_topic = f"{source_topic}_filtered_{filter_name}"
-        self.mode_topic = f"{source_topic}_filtered_{filter_name}/parameters/mode"
-        self.window_topic = f"{source_topic}_filtered_{filter_name}/parameters/window"
+        self.mode_topic = f"{source_topic}_filtered_{filter_name}/mode"
+        self.window_topic = f"{source_topic}_filtered_{filter_name}/window"
         self.mode = mode
         self.window_size = window_size
         self.window = collections.deque(maxlen=window_size)
@@ -263,8 +263,8 @@ print(f"   • Supprimer un filtre: publier le nom du filtre (ex: 'A_1') sur '{T
 print("   • Les noms de filtres sont générés automatiquement: A_1, A_2, B_1, etc.")
 print("   • Topics générés:")
 print("     - Valeurs filtrées: simulateur/X/value_filtered_X_N")
-print("     - Mode: simulateur/X/value_filtered_X_N/parameters/mode")
-print("     - Fenêtre: simulateur/X/value_filtered_X_N/parameters/window")
+print("     - Mode: simulateur/X/value_filtered_X_N/mode")
+print("     - Fenêtre: simulateur/X/value_filtered_X_N/window")
 
 
 # Afficher les filtres actifs
