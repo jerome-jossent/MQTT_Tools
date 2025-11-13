@@ -20,8 +20,12 @@ TOPIC_FILTER_NEW = "Filter/new"  # Topic pour créer un nouveau filtre
 TOPIC_FILTER_DELETE = "Filter/delete"  # Topic pour supprimer un filtre
 INITIAL_FILTER_TOPIC = "simulateur/A/value"  # Topic initial à filtrer
 TOPIC_FILTER_INFO = "Filter/infos"  # Topic pour afficher les dernières infos
-DEFAULT_MODE = 1  # 1 : moyenne glissante 2 : médiane glissante
-DEFAULT_WINDOW_SIZE = 5
+DEFAULT_MODE = 1
+# 1 : moyenne glissante
+# 2 : médiane glissante
+# 3 : max glissant
+# 4 : min glissant
+DEFAULT_WINDOW_SIZE = 5 # x dernières valeurs (filtre temps réel)
 
 class Filter:
     def __init__(self, source_topic, filter_name, window_size=DEFAULT_WINDOW_SIZE, mode=DEFAULT_MODE):
@@ -39,10 +43,17 @@ class Filter:
 
         if self.mode == 1:  # moyenne
             filtered = sum(self.window) / len(self.window)
-        else:  # median
+
+        if self.mode == 2:  # median
             sorted_w = sorted(self.window)
             mid_i = len(sorted_w) // 2
             filtered = (sorted_w[mid_i - 1] + sorted_w[mid_i]) / 2.0 if len(sorted_w) % 2 == 0 else sorted_w[mid_i]
+
+        if self.mode == 3:  # max
+            filtered = max(self.window)
+
+        if self.mode == 4:  # main
+            filtered = min(self.window)
 
         return filtered
 
@@ -61,6 +72,7 @@ class Filter:
 
 filters = {}  # key: filter_name (ex: "A_1"), value: instance Filter
 source_counters = {}  # key: topic source, value: compteur pour la nomenclature
+mode_names = ['none', 'moyenne', 'médiane', 'maximum', 'minimum']
 
 # Fonctions utilitaires
 def extract_variable_name(source_topic):
@@ -130,6 +142,8 @@ def print_mqtt(message):
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ Connexion au broker réussie.")
+        client.publish(TOPIC_FILTER_NEW, "publier ici 1 par 1 les topics pointant sur les valeurs à filtrer")
+
         # Souscrire aux topics de gestion
         client.subscribe([
             (TOPIC_FILTER_NEW, 0),  # Topic de création
@@ -150,6 +164,7 @@ def on_disconnect(client, userdata, rc):
         print("✅ Déconnexion propre.")
 
 def on_message(client, userdata, msg):
+    #global                     mode_names
     topic = msg.topic
     # print(f"DEBUG: Message reçu sur {topic}")
 
@@ -221,12 +236,12 @@ def on_message(client, userdata, msg):
         if topic == filter_obj.mode_topic:
             try:
                 val = int(msg.payload.decode('utf-8'))
-                if val in (1, 2):
+                if 1 <= val <= 4:
                     filter_obj.mode = val
-                    mode_name = 'moyenne' if val == 1 else 'médiane'
+                    mode_name = mode_names[val]
                     print_mqtt(f"[{time.strftime('%H:%M:%S')}] {filter_obj.filter_name} → Mode changé: {mode_name}")
                 else:
-                    print_mqtt(f"⚠️ Mode invalide (doit être 1 ou 2): {val}")
+                    print_mqtt(f"⚠️ Mode invalide (doit être 1 ou 4): {val}")
             except ValueError:
                 print_mqtt(f"⚠️ Mode invalide sur {topic}: {msg.payload}")
 
@@ -262,9 +277,9 @@ print(f"   • Créer un filtre: publier le topic source sur '{TOPIC_FILTER_NEW}
 print(f"   • Supprimer un filtre: publier le nom du filtre (ex: 'A_1') sur '{TOPIC_FILTER_DELETE}'")
 print("   • Les noms de filtres sont générés automatiquement: A_1, A_2, B_1, etc.")
 print("   • Topics générés:")
-print("     - Valeurs filtrées: simulateur/X/value_filtered_X_N")
-print("     - Mode: simulateur/X/value_filtered_X_N/mode")
-print("     - Fenêtre: simulateur/X/value_filtered_X_N/window")
+print("     - Valeurs filtrées (out): simulateur/X/value_filtered_X_N")
+print("     - Mode (in): 1 à 4 (moyenne, médiane, max, min glissant) simulateur/X/value_filtered_X_N/mode")
+print("     - Fenêtre (in): (taille de la fenêtre en nombre de valeurs) simulateur/X/value_filtered_X_N/window")
 
 
 # Afficher les filtres actifs
@@ -276,6 +291,10 @@ def show_active_filters():
                 mode_str = "moyenne"
             if filter_obj.mode == 2:
                 mode_str = "médiane"
+            if filter_obj.mode == 3:
+                mode_str = "maximum"
+            if filter_obj.mode == 4:
+                mode_str = "minimum"
             print(f"   • {filter_name}: {filter_obj.source_topic} → {filter_obj.filtered_topic}")
             print(f"     Mode ({filter_obj.mode}): {mode_str}, Fenêtre: {filter_obj.window_size}")
 
@@ -284,6 +303,4 @@ time.sleep(2)  # Laisser le temps au filtre initial de se créer
 show_active_filters()
 
 while True:
-    time.sleep(10)
-    # Optionnel: afficher périodiquement l'état des filtres
-    # show_active_filters()
+    time.sleep(1)
